@@ -34,25 +34,26 @@
 
 ;;; Change Log:
 ;;
-;; 0.1.1 Removed asynchronous handling to make logic simpler
-;;       Added "quote.cnbc.com" api to get US stock information
-;;       Remove HK stock, as no available api for now
-;; 0.1.2 Support asynchronous stock fetching with async
-;; 0.1.3 Clean hanging subprocesses periodically
-;;       Save stock-tracker-list-of-stocks with desktop
-;; 0.1.4 Fix can't add and remove stock issue
-;;       Colorize stock based on price
-;; 0.1.5 Add timestamp to skip outdated data
-;;       Fix empty line generated during adding/removing stocks
-;;       Restore original position after refreshing stocks
-;;       Disable logging by default
-;; 0.1.6 Add stock-tracker-stop-refresh
-;;       Add refresh state
-;;       Add stock-tracker-up-red-down-green to config color
-;; 0.1.7 Fix US stock not working issue
-;;       Add test for both CHN and US stocks
-;; 0.1.8 Disable test for CHN stocks due to API not working
-;; 0.1.9 Fix wrong stock order issue for us-stocks during auto-refreshing
+;; 0.1.1  Removed asynchronous handling to make logic simpler
+;;        Added "quote.cnbc.com" api to get US stock information
+;;        Remove HK stock, as no available api for now
+;; 0.1.2  Support asynchronous stock fetching with async
+;; 0.1.3  Clean hanging subprocesses periodically
+;;        Save stock-tracker-list-of-stocks with desktop
+;; 0.1.4  Fix can't add and remove stock issue
+;;        Colorize stock based on price
+;; 0.1.5  Add timestamp to skip outdated data
+;;        Fix empty line generated during adding/removing stocks
+;;        Restore original position after refreshing stocks
+;;        Disable logging by default
+;; 0.1.6  Add stock-tracker-stop-refresh
+;;        Add refresh state
+;;        Add stock-tracker-up-red-down-green to config color
+;; 0.1.7  Fix US stock not working issue
+;;        Add test for both CHN and US stocks
+;; 0.1.8  Disable test for CHN stocks due to API not working
+;; 0.1.9  Fix wrong stock order issue for us-stocks during auto-refreshing
+;; 0.1.10 Add ability to include the purchase price of a stock
 
 ;;; Code:
 
@@ -99,6 +100,12 @@
 (defcustom stock-tracker-up-red-down-green t
   "Display up as red, down as green, set nil to reverse this."
   :type 'boolean
+  :group 'stock-tracker)
+
+(defcustom stock-tracker-purchases '(("BABA" . 20))
+  "Storing stock symbols and their purchase prices."
+  :type '(alist :key-type (string :tag "Stock Symbol")
+                :value-type (number :tag "Purchase Price"))
   :group 'stock-tracker)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -176,11 +183,11 @@
   "Stock-Tracker result Buffer name.")
 
 (defconst stock-tracker--result-header
-  "|-\n| symbol | name | price | percent | updown | high | low | volume | open | yestclose |\n"
+  "|-\n| symbol | name | purchase | price | percent | updown | high | low | volume | open | yestclose |\n"
   "Stock-Tracker result header.")
 
 (defconst stock-tracker--result-item-format
-  "|-\n| %s | %s | %s | %.2f %% | %.2f | %s | %s | %s | %s | %.2f |\n"
+  "|-\n| %s | %s | %s | %s | %.2f %% | %.2f | %s | %s | %s | %s | %.2f |\n"
   "Stock-Tracker result item format.")
 
 (defconst stock-tracker--response-buffer "*api-response*"
@@ -193,6 +200,7 @@
 (defconst stock-tracker--note-string
   (purecopy
    "** Add     stock, use [ *a* ]
+** Buy     stock, use [ *b* ]
 ** Delete  stock, use [ *d* ]
 ** Start refresh, use [ *g* ]
 ** Stop  refresh, use [ *s* ]
@@ -318,22 +326,23 @@ It defaults to a comma."
 
 (defun stock-tracker--format-json (json tag)
   "Format stock information from JSON with TAG."
-  (let ((result-filds (stock-tracker--result-fields tag))
+  (let ((result-fields (stock-tracker--result-fields tag))
         symbol name price percent (updown 0) color
         high low volume open yestclose code)
 
     (setq
-      code      (assoc-default (map-elt result-filds 'code)      json)
-      symbol    (assoc-default (map-elt result-filds 'symbol)    json)
-      name      (assoc-default (map-elt result-filds 'name)      json) ; chinese-word failed to align
-      price     (assoc-default (map-elt result-filds 'price)     json)
-      percent   (assoc-default (map-elt result-filds 'percent)   json)
-      updown    (assoc-default (map-elt result-filds 'updown)    json)
-      open      (assoc-default (map-elt result-filds 'open)      json)
-      yestclose (assoc-default (map-elt result-filds 'yestclose) json)
-      high      (assoc-default (map-elt result-filds 'high)      json)
-      low       (assoc-default (map-elt result-filds 'low)       json)
-      volume    (assoc-default (map-elt result-filds 'volume)    json))
+      code      (assoc-default (map-elt result-fields 'code)      json)
+      symbol    (assoc-default (map-elt result-fields 'symbol)    json)
+      name      (assoc-default (map-elt result-fields 'name)      json) ; chinese-word failed to align
+      purchase  (or (cdr (assoc symbol stock-tracker-purchases)) 0)
+      price     (assoc-default (map-elt result-fields 'price)     json)
+      percent   (assoc-default (map-elt result-fields 'percent)   json)
+      updown    (assoc-default (map-elt result-fields 'updown)    json)
+      open      (assoc-default (map-elt result-fields 'open)      json)
+      yestclose (assoc-default (map-elt result-fields 'yestclose) json)
+      high      (assoc-default (map-elt result-fields 'high)      json)
+      low       (assoc-default (map-elt result-fields 'low)       json)
+      volume    (assoc-default (map-elt result-fields 'volume)    json))
 
     ;; sanity check
     (unless (and symbol name price percent updown open yestclose high low volume)
@@ -358,7 +367,7 @@ It defaults to a comma."
     (and symbol
          (propertize
           (format stock-tracker--result-item-format symbol
-                  name price percent updown high low
+                  name purchase price percent updown high low
                   (stock-tracker--add-number-grouping volume ",")
                   open yestclose)
           'stock-code  code
@@ -559,9 +568,12 @@ It defaults to a comma."
            (when all-collected-stocks-info
              (stock-tracker--refresh-content all-collected-stocks-info))))))))
 
+(defun stock-tracker--all-stocks ()
+  (append stock-tracker-list-of-stocks (mapcar #'car stock-tracker-purchases)))
+
 (defun stock-tracker--refresh (&optional asynchronously)
   "Refresh list of stocks ASYNCHRONOUSLY or not."
-  (when-let* ((has-stocks stock-tracker-list-of-stocks)
+  (when-let* ((has-stocks (stock-tracker--all-stocks)))
               (valid-stocks (delq nil (delete-dups has-stocks))))
     (let* ((chn-stocks (stock-tracker--get-chn-stocks valid-stocks))
            (us-stocks (stock-tracker--get-us-stocks valid-stocks))
@@ -635,16 +647,17 @@ It defaults to a comma."
 ;; Operations
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defun stock-tracker-add-stock ()
+(defun stock-tracker-add-stock (stock)
   "Add new stock in table."
-  (interactive)
-  (let* ((stock (format "%s" (read-from-minibuffer "stock? ")))
-         (tag
+  (interactive
+   (list
+    (read-string "Stock Symbol (e.g. GOOG): ")))
+  (let* ((tag
           (if (zerop (string-to-number stock))
               (make-stock-tracker--us-symbol)
             (make-stock-tracker--chn-symbol))))
     (when-let* ((is-valid-stock (not (string= "" stock)))
-                (is-not-duplicate (not (member stock stock-tracker-list-of-stocks)))
+                (is-not-duplicate (not (member stock (stock-tracker--all-stocks))))
                 (recved-stocks-info
                  (stock-tracker--format-response (stock-tracker--request-synchronously stock tag) tag))
                 (success (not (string= "" recved-stocks-info))))
@@ -677,6 +690,18 @@ It defaults to a comma."
             (stock-tracker--align-colorize-tables)
             (set-buffer-modified-p nil)))))))
 
+(defun stock-tracker-add-purchase (symbol price)
+  "Add or modify a stock's buy price."
+  (interactive
+   (list
+    (read-string "Enter stock symbol: ")
+    (read-number "Enter purchase price: ")))
+  (stock-tracker-add-stock symbol)
+  (if (cdr (assoc symbol stock-tracker-purchases))
+      (setcdr (assoc symbol stock-tracker-purchases) price)
+    (add-to-list 'stock-tracker-purchases (cons symbol price)))
+  (message "Add %s with buy price %.2f" symbol price))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Mode
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -687,6 +712,7 @@ It defaults to a comma."
     (define-key map (kbd "p") 'previous-line)
     (define-key map (kbd "n") 'next-line)
     (define-key map (kbd "a") 'stock-tracker-add-stock)
+    (define-key map (kbd "b") 'stock-tracker-add-purchase)
     (define-key map (kbd "d") 'stock-tracker-remove-stock)
     (define-key map (kbd "g") 'stock-tracker-start)
     (define-key map (kbd "s") 'stock-tracker-stop-refresh)
